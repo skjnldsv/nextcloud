@@ -1,0 +1,109 @@
+{
+	"apps": [
+		{
+			"id": "server",
+			"repo": "nextcloud/server",
+			"branch": "stable26"
+		},
+		{
+			"id": "activity",
+			"repo": "nextcloud/activity",
+			"branch": "stable26"
+		},
+		{
+			"id": "files_pdfviewer",
+			"repo": "nextcloud/files_pdfviewer",
+			"branch": "stable26"
+		},
+		{
+			"id": "files_rightclick",
+			"repo": "nextcloud/files_rightclick",
+			"branch": "stable26"
+		},
+		{
+			"id": "firstrunwizard",
+			"repo": "nextcloud/firstrunwizard",
+			"branch": "stable26"
+		},
+		{
+			"id": "logreader",
+			"repo": "nextcloud/logreader",
+			"branch": "stable26"
+		},
+		{
+			"id": "nextcloud_announcements",
+			"repo": "nextcloud/nextcloud_announcements",
+			"branch": "stable26"
+		},
+		{
+			"id": "notifications",
+			"repo": "nextcloud/notifications",
+			"branch": "stable26"
+		},
+		{
+			"id": "password_policy",
+			"repo": "nextcloud/password_policy",
+			"branch": "stable26"
+		},
+		{
+			"id": "photos",
+			"repo": "nextcloud/photos",
+			"branch": "stable26"
+		},
+		{
+			"id": "privacy",
+			"repo": "nextcloud/privacy",
+			"branch": "stable26"
+		},
+		{
+			"id": "recommendations",
+			"repo": "nextcloud/recommendations",
+			"branch": "stable26"
+		},
+		{
+			"id": "serverinfo",
+			"repo": "nextcloud/serverinfo",
+			"branch": "stable26"
+		},
+		{
+			"id": "support",
+			"repo": "nextcloud/support",
+			"branch": "stable26"
+		},
+		{
+			"id": "survey_client",
+			"repo": "nextcloud/survey_client",
+			"branch": "stable26"
+		},
+		{
+			"id": "text",
+			"repo": "nextcloud/text",
+			"branch": "stable26"
+		},
+		{
+			"id": "viewer",
+			"repo": "nextcloud/viewer",
+			"branch": "stable26"
+		},
+		{
+			"id": "bruteforcesettings",
+			"repo": "nextcloud/bruteforcesettings",
+			"branch": "stable26"
+		},
+		{
+			"id": "related_resources",
+			"repo": "nextcloud/related_resources",
+			"branch": "stable26"
+		},
+		{
+			"id": "suspicious_login",
+			"repo": "nextcloud/suspicious_login",
+			"branch": "stable26"
+		},
+		{
+			"id": "twofactor_totp",
+			"repo": "nextcloud/twofactor_totp",
+			"branch": "stable26"
+		}
+	]
+}
