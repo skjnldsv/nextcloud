@@ -102,23 +102,19 @@ jobs:
 
       - name: Decompress apps
         run: |
+          ls -lah ./*
           find -name '*.tar' -execdir tar -xf {} \;
           find -name '*.tar' -exec rm {} \;
-          mv ./* /tmp/server/apps
+          ls -lah ./*
+          mv ./* /tmp/server/apps/
 
-      - name: Compress release
-        run: |
-          tar -czf /tmp/nextcloud.tar.gz /tmp/server
-          ls -lah /tmp/nextcloud.tar.gz
+      # - name: Compress release
+      #   run: |
+      #     tar -czf /tmp/nextcloud.tar.gz /tmp/server
+      #     ls -lah /tmp/nextcloud.tar.gz
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: nextcloud
-          path: /tmp/nextcloud.tar.gz
-
-      - name: Release
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          files: /tmp/nextcloud.tar.gz
+      # - name: Upload artifact
+      #   uses: actions/upload-artifact@v3
+      #   with:
+      #     name: nextcloud
+      #     path: /tmp/nextcloud.tar.gz
