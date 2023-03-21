@@ -20,7 +20,7 @@ jobs:
           REPOS=$(cat "stable26.json" | jq -c)
           echo "matrix=$REPOS" >> $GITHUB_OUTPUT
 
-  fetch-build:
+  fetch-and-build:
     needs: init
     runs-on: ubuntu-latest
 
@@ -77,16 +77,16 @@ jobs:
       - name: Compress artifact
         run: |
           rm -rf .git
-          tar -czf /tmp/${{ matrix.apps.id}}.tar.gz .
+          tar -cf /tmp/${{ matrix.apps.id}}.tar .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
           name: ${{ matrix.apps.id}}
-          path: /tmp/${{ matrix.apps.id}}.tar.gz
+          path: /tmp/${{ matrix.apps.id}}.tar
   
   assemble:
-    needs: fetch-build
+    needs: fetch-and-build
     runs-on: ubuntu-latest
 
     steps:
@@ -96,23 +96,22 @@ jobs:
       - name: Decompress server
         run: |
           mkdir /tmp/server
-          tar -xzf server/server.tar.gz --directory /tmp/server
+          tar -xf server/server.tar --directory /tmp/server
           rm -rf server
 
       - name: Decompress apps
         run: |
-          find -name '*.tar.gz' -execdir tar -zxf {} \;
-          find -name '*.tar.gz' -exec rm {} \;
+          find -name '*.tar' -execdir tar -xf {} \;
+          find -name '*.tar' -exec rm {} \;
           mv ./* /tmp/server/apps
 
       - name: Compress release
         run: |
-          rm -rf .git
           tar -czf /tmp/nextcloud.tar.gz /tmp/server
           ls -la /tmp/nextcloud.tar.gz
 
       - name: Attach tarball to github release
-        uses: svenstaro/upload-release-action@v2
+        uses: svenstaro/upload-release-action@v2.5.0
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: /tmp/nextcloud.tar.gz
