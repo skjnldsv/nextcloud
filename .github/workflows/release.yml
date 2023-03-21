@@ -104,16 +104,16 @@ jobs:
           ls -lah ./*
           find -name '*.tar' -execdir tar -xf {} \;
           find -name '*.tar' -exec rm {} \;
-          ls -lah ./*
           mv ./* /tmp/server/apps/
+          ls -lah /tmp/server/apps/
 
-      # - name: Compress release
-      #   run: |
-      #     tar -czf /tmp/nextcloud.tar.gz /tmp/server
-      #     ls -lah /tmp/nextcloud.tar.gz
+      - name: Compress release
+        run: |
+          tar -czf /tmp/nextcloud.tar.gz /tmp/server
+          ls -lah /tmp/nextcloud.tar.gz
 
-      # - name: Upload artifact
-      #   uses: actions/upload-artifact@v3
-      #   with:
-      #     name: nextcloud
-      #     path: /tmp/nextcloud.tar.gz
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: nextcloud
+          path: /tmp/nextcloud.tar.gz
