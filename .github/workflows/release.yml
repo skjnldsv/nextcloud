@@ -108,7 +108,7 @@ jobs:
       - name: Compress release
         run: |
           tar -czf /tmp/nextcloud.tar.gz /tmp/server
-          ls -la /tmp/nextcloud.tar.gz
+          ls -lah /tmp/nextcloud.tar.gz
 
       - name: Attach tarball to github release
         uses: svenstaro/upload-release-action@v2.5.0
