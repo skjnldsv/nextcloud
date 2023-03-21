@@ -109,6 +109,7 @@ jobs:
         run: |
           rm -rf .git
           tar -czf /tmp/nextcloud.tar.gz /tmp/server
+          ls -la /tmp/nextcloud.tar.gz
 
       - name: Attach tarball to github release
         uses: svenstaro/upload-release-action@v2
