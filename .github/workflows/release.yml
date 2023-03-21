@@ -1,8 +1,9 @@
 name: New Nextcloud release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*.*.*"
 
 jobs:
   init:
@@ -116,9 +117,8 @@ jobs:
           name: nextcloud
           path: /tmp/nextcloud.tar.gz
 
-      - name: Upload to release
-        uses: JasonEtco/upload-to-release@master
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
         with:
-          args: /tmp/nextcloud.tar.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: /tmp/nextcloud.tar.gz
