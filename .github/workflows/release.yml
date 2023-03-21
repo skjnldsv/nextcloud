@@ -98,17 +98,12 @@ jobs:
           mkdir /tmp/server
           tar -xzf server/server.tar.gz --directory /tmp/server
           rm -rf server
-          ls -R /tmp/server
 
       - name: Decompress apps
         run: |
           find -name '*.tar.gz' -execdir tar -zxf {} \;
           find -name '*.tar.gz' -exec rm {} \;
-          ls -R .
           mv ./* /tmp/server/apps
-          
-      - name: Display structure of Nextcloud release
-        run: ls -R /tmp/server
 
       - name: Compress release
         run: |
