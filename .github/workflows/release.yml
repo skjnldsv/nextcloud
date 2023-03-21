@@ -1,0 +1,125 @@
+name: New Nextcloud release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    outputs:
+      apps: ${{ steps.matrix.outputs.matrix }}
+
+    steps:
+      - name: Checkout config
+        uses: actions/checkout@v3
+
+      - name: Generate matrix
+        id: matrix
+        run: |
+          REPOS=$(cat "stable26.json" | jq -c)
+          echo "matrix=$REPOS" >> $GITHUB_OUTPUT
+
+  fetch-build:
+    needs: init
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix: ${{ fromJSON(needs.init.outputs.apps) }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ matrix.apps.repo}}
+          ref: ${{ matrix.apps.branch}}
+
+      - name: Check composer file existence
+        id: check_composer
+        uses: andstor/file-existence-action@v2
+        with:
+          files: composer.json
+
+      - name: Set up dependencies
+        if: steps.check_composer.outputs.files_exists == 'true'
+        run: composer i --no-dev
+
+      - name: Check npm file existence
+        id: check_npm
+        uses: andstor/file-existence-action@v2
+        with:
+          files: package.json
+
+      - name: Read package.json node and npm engines version
+        if: steps.check_npm.outputs.files_exists == 'true'
+        uses: skjnldsv/read-package-engines-version-actions@v1.2
+        id: versions
+        with:
+          fallbackNode: '^16'
+          fallbackNpm: '^8'
+
+      - name: Set up node ${{ steps.versions.outputs.nodeVersion }}
+        if: steps.check_npm.outputs.files_exists == 'true'
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ steps.versions.outputs.nodeVersion }}
+
+      - name: Set up npm ${{ steps.versions.outputs.npmVersion }}
+        if: steps.check_npm.outputs.files_exists == 'true'
+        run: npm i -g npm@"${{ steps.versions.outputs.npmVersion }}"
+
+      - name: Install dependencies & build
+        if: steps.check_npm.outputs.files_exists == 'true'
+        run: |
+          npm ci
+          npm run build --if-present
+      
+      - name: Compress artifact
+        run: |
+          rm -rf .git
+          tar -czf /tmp/${{ matrix.apps.id}}.tar.gz .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.apps.id}}
+          path: /tmp/${{ matrix.apps.id}}.tar.gz
+  
+  assemble:
+    needs: fetch-build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Fetch artifacts
+        uses: actions/download-artifact@v3
+      
+      - name: Decompress server
+        run: |
+          mkdir /tmp/server
+          tar -xzf server/server.tar.gz --directory /tmp/server
+          rm -rf server
+          ls -R /tmp/server
+
+      - name: Decompress apps
+        run: |
+          find -name '*.tar.gz' -execdir tar -zxf {} \;
+          find -name '*.tar.gz' -exec rm {} \;
+          ls -R .
+          mv ./* /tmp/server/apps
+          
+      - name: Display structure of Nextcloud release
+        run: ls -R /tmp/server
+
+      - name: Compress release
+        run: |
+          rm -rf .git
+          tar -czf /tmp/nextcloud.tar.gz /tmp/server
+
+      - name: Attach tarball to github release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: /tmp/nextcloud.tar.gz
+          asset_name: nextcloud.tar.gz
+          tag: ${{ github.ref }}
+          overwrite: true
