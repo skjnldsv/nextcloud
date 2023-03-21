@@ -110,8 +110,15 @@ jobs:
           tar -czf /tmp/nextcloud.tar.gz /tmp/server
           ls -lah /tmp/nextcloud.tar.gz
 
-      - name: Attach tarball to github release
-        uses: AButler/upload-release-assets@v2.0
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
         with:
-          files: /tmp/nextcloud.tar.gz
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          name: nextcloud
+          path: /tmp/nextcloud.tar.gz
+
+      - name: Upload to release
+        uses: JasonEtco/upload-to-release@master
+        with:
+          args: /tmp/nextcloud.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
