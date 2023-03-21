@@ -52,7 +52,7 @@ jobs:
 
       - name: Read package.json node and npm engines version
         if: steps.check_npm.outputs.files_exists == 'true'
-        uses: skjnldsv/read-package-engines-version-actions@v1.2
+        uses: skjnldsv/read-package-engines-version-actions@v2.0
         id: versions
         with:
           fallbackNode: '^16'
