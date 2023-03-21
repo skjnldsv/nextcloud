@@ -111,10 +111,7 @@ jobs:
           ls -lah /tmp/nextcloud.tar.gz
 
       - name: Attach tarball to github release
-        uses: svenstaro/upload-release-action@v2.5.0
+        uses: AButler/upload-release-assets@v2.0
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: /tmp/nextcloud.tar.gz
-          asset_name: nextcloud.tar.gz
-          tag: ${{ github.ref }}
-          overwrite: true
+          files: /tmp/nextcloud.tar.gz
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
