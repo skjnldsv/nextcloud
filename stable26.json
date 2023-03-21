@@ -66,11 +66,6 @@
 			"branch": "stable26"
 		},
 		{
-			"id": "support",
-			"repo": "nextcloud/support",
-			"branch": "stable26"
-		},
-		{
 			"id": "survey_client",
 			"repo": "nextcloud/survey_client",
 			"branch": "stable26"
