@@ -93,6 +93,9 @@ jobs:
       - name: Fetch artifacts
         uses: actions/download-artifact@v3
       
+      - name: Install apt dependencies
+        run: sudo apt-get install -y pigz &
+      
       - name: Decompress server
         run: |
           mkdir /tmp/server
@@ -109,7 +112,6 @@ jobs:
 
       - name: Create and compress release
         run: |
-          sudo apt-get install -y pigz
           tar -I pigz -cf /tmp/nextcloud.tar.gz /tmp/server
           ls -lah /tmp/nextcloud.tar.gz
 
