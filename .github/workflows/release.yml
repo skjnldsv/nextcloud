@@ -109,11 +109,11 @@ jobs:
 
       - name: Compress release
         run: |
-          tar -czf /tmp/nextcloud.tar.gz /tmp/server
-          ls -lah /tmp/nextcloud.tar.gz
+          tar -cf /tmp/nextcloud.tar /tmp/server
+          ls -lah /tmp/nextcloud.tar
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
           name: nextcloud
-          path: /tmp/nextcloud.tar.gz
+          path: /tmp/nextcloud.tar
