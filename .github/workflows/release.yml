@@ -109,12 +109,12 @@ jobs:
 
       - name: Create and compress release
         run: |
-          apt-get install -y pigz
-          tar -I pigz -cf /tmp/nextcloud.tar.gz /tmp/server
-          ls -lah /tmp/nextcloud.tar.gz
+          sudo apt-get install -y lbzip2
+          tar -I lbzip2 -cf /tmp/nextcloud.tar.bz2 /tmp/server
+          ls -lah /tmp/nextcloud.tar.bz2
 
       - name: Upload release
         uses: actions/upload-artifact@v3
         with:
           name: nextcloud
-          path: /tmp/nextcloud.tar.gz
+          path: /tmp/nextcloud.tar.bz2
