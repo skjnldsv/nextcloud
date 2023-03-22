@@ -107,13 +107,13 @@ jobs:
           mv ./* /tmp/server/apps/
           ls -lah /tmp/server/apps/
 
-      - name: Compress release
+      - name: Create and compress release
         run: |
-          tar -czf /tmp/nextcloud.tar.gz /tmp/server
-          ls -lah /tmp/nextcloud.tar.gz
+          tar -Jcvf /tmp/nextcloud.tar.xz /tmp/server
+          ls -lah /tmp/nextcloud.tar.xz
 
-      - name: Upload artifact
+      - name: Upload release
         uses: actions/upload-artifact@v3
         with:
           name: nextcloud
-          path: /tmp/nextcloud.tar.gz
+          path: /tmp/nextcloud.tar.xz
