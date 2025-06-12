@@ -73,6 +73,27 @@ jobs:
         run: |
           npm ci
           npm run build --if-present
+
+      - name: Process .nextcloudignore file
+        run: |
+          if [ -f ".nextcloudignore" ]; then
+            echo "Processing .nextcloudignore file..."
+            # Read each line from .nextcloudignore and remove matching files/directories
+            while IFS= read -r pattern || [[ -n "$pattern" ]]; do
+              # Skip empty lines and comments
+              [[ -z "$pattern" || "$pattern" =~ ^[[:space:]]*# ]] && continue
+              
+              echo "Removing files matching pattern: $pattern"
+              # Use find with -delete for safe removal, handle both files and directories
+              find . -path "./$pattern" -delete 2>/dev/null || true
+              # Also try glob pattern matching for shell patterns
+              rm -rf $pattern 2>/dev/null || true
+            done < .nextcloudignore
+            
+            echo "Finished processing .nextcloudignore"
+          else
+            echo "No .nextcloudignore file found"
+          fi
       
       - name: Compress artifact
         run: |
@@ -94,26 +115,48 @@ jobs:
         uses: actions/download-artifact@v4
       
       - name: Install dependencies
-        run: sudo apt-get install -y lbzip2 &
+        run: sudo apt-get install -y lbzip2
       
       - name: Decompress server
         run: |
-          mkdir /tmp/server
+          mkdir -p /tmp/server
           tar -xf server/server.tar --directory /tmp/server
           rm -rf server
 
       - name: Decompress apps
         run: |
-          ls -lah ./*
-          find -name '*.tar' -execdir tar -xf {} \;
-          find -name '*.tar' -exec rm {} \;
-          mv ./* /tmp/server/apps/
+          echo "Available artifacts:"
+          ls -lah ./
+          
+          # Create apps directory if it doesn't exist
+          mkdir -p /tmp/server/apps
+          
+          # Process each app directory (excluding server which we already processed)
+          for app_dir in */; do
+            app_name=$(basename "$app_dir")
+            if [ "$app_name" != "server" ]; then
+              echo "Processing app: $app_name"
+              
+              # Find and extract the tar file for this app
+              if [ -f "$app_dir/$app_name.tar" ]; then
+                echo "Extracting $app_name.tar to /tmp/server/apps/$app_name"
+                mkdir -p "/tmp/server/apps/$app_name"
+                tar -xf "$app_dir/$app_name.tar" --directory "/tmp/server/apps/$app_name"
+                rm -f "$app_dir/$app_name.tar"
+              else
+                echo "Warning: No tar file found for app $app_name"
+              fi
+            fi
+          done
+          
+          echo "Final apps directory structure:"
           ls -lah /tmp/server/apps/
 
       - name: Create and compress release
         run: |
-          tar -I lbzip2 -cf /tmp/nextcloud.tar.bz2 /tmp/server
-          ls -lah /tmp/nextcloud.tar.bz2
+          cd /tmp
+          tar -I lbzip2 -cf nextcloud.tar.bz2 server/
+          ls -lah nextcloud.tar.bz2
 
       - name: Upload release
         uses: actions/upload-artifact@v4
