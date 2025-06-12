@@ -36,7 +36,7 @@ jobs:
 
       - name: Check composer file existence
         id: check_composer
-        uses: andstor/file-existence-action@v2
+        uses: andstor/file-existence-action@v3
         with:
           files: composer.json
 
@@ -46,7 +46,7 @@ jobs:
 
       - name: Check npm file existence
         id: check_npm
-        uses: andstor/file-existence-action@v2
+        uses: andstor/file-existence-action@v3
         with:
           files: package.json
 
