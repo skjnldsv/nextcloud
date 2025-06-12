@@ -80,7 +80,7 @@ jobs:
           tar -cf /tmp/${{ matrix.apps.id}}.tar .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.apps.id}}
           path: /tmp/${{ matrix.apps.id}}.tar
@@ -116,7 +116,7 @@ jobs:
           ls -lah /tmp/nextcloud.tar.bz2
 
       - name: Upload release
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: nextcloud
           path: /tmp/nextcloud.tar.bz2
