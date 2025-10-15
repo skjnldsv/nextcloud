@@ -60,7 +60,7 @@ jobs:
 
       - name: Set up node ${{ steps.versions.outputs.nodeVersion }}
         if: steps.check_npm.outputs.files_exists == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ steps.versions.outputs.nodeVersion }}
 
