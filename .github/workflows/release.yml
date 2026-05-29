@@ -203,20 +203,25 @@ jobs:
       - name: Clean app dev files
         if: matrix.type == 'app'
         run: |
-          # Process .nextcloudignore (literal path matching)
-          # Replicates release script's removeIgnoredFiles() exactly
+          # Process .nextcloudignore
+          # Handles: literal paths, glob patterns (composer.*), and
+          # recursive patterns (no leading / matches in subdirs too)
           if [ -f ".nextcloudignore" ]; then
             APP_DIR=$(pwd)
             while IFS= read -r line || [[ -n "$line" ]]; do
-              # Trim whitespace and carriage returns
               pattern=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/\r$//')
               [[ -z "$pattern" || "$pattern" == \#* ]] && continue
-              # Strip leading slash (entries like /vendor-bin are relative to app root)
-              pattern="${pattern#/}"
-              [[ -z "$pattern" ]] && continue
-              target=$(realpath "$APP_DIR/$pattern" 2>/dev/null) || continue
-              [[ "$target" != "$APP_DIR/"* ]] && continue
-              [ -e "$APP_DIR/$pattern" ] && rm -rf "$APP_DIR/$pattern"
+
+              if [[ "$pattern" == /* ]]; then
+                # Rooted pattern: match from app root only, support globs
+                pattern="${pattern#/}"
+                # Use find with -maxdepth 1 for root-level glob matching
+                # shellcheck disable=SC2086
+                find "$APP_DIR" -maxdepth 1 -name "$pattern" -exec rm -rf {} + 2>/dev/null || true
+              else
+                # Unrooted pattern: match recursively (like gitignore)
+                find "$APP_DIR" -name "$pattern" -exec rm -rf {} + 2>/dev/null || true
+              fi
             done < .nextcloudignore
           fi
 
@@ -396,17 +401,18 @@ jobs:
           for dir in "${TARGET_DIRS[@]}"; do
             [ -d "$dir" ] || continue
 
-            # Process .nextcloudignore if present (literal path matching)
+            # Process .nextcloudignore if present
             if [ -f "$dir/.nextcloudignore" ]; then
               real_dir=$(realpath "$dir")
               while IFS= read -r line || [[ -n "$line" ]]; do
                 pattern=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/\r$//')
                 [[ -z "$pattern" || "$pattern" == \#* ]] && continue
-                pattern="${pattern#/}"
-                [[ -z "$pattern" ]] && continue
-                target=$(realpath "$dir/$pattern" 2>/dev/null) || continue
-                [[ "$target" != "$real_dir/"* ]] && continue
-                [ -e "$dir/$pattern" ] && rm -rf "$dir/$pattern"
+                if [[ "$pattern" == /* ]]; then
+                  pattern="${pattern#/}"
+                  find "$real_dir" -maxdepth 1 -name "$pattern" -exec rm -rf {} + 2>/dev/null || true
+                else
+                  find "$real_dir" -name "$pattern" -exec rm -rf {} + 2>/dev/null || true
+                fi
               done < "$dir/.nextcloudignore"
             fi
 
