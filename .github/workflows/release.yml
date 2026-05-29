@@ -204,8 +204,8 @@ jobs:
         if: matrix.type == 'app'
         run: |
           # Process .nextcloudignore
-          # Handles: literal paths, glob patterns (composer.*), and
-          # recursive patterns (no leading / matches in subdirs too)
+          # Handles: literal paths, glob patterns (composer.*), paths with
+          # subdirs (/vendor/bin), and recursive patterns (.github)
           if [ -f ".nextcloudignore" ]; then
             APP_DIR=$(pwd)
             while IFS= read -r line || [[ -n "$line" ]]; do
@@ -213,11 +213,13 @@ jobs:
               [[ -z "$pattern" || "$pattern" == \#* ]] && continue
 
               if [[ "$pattern" == /* ]]; then
-                # Rooted pattern: match from app root only, support globs
+                # Rooted pattern: relative to app root
                 pattern="${pattern#/}"
-                # Use find with -maxdepth 1 for root-level glob matching
+                # Use shell glob expansion (handles composer.*, package*, vendor/bin)
                 # shellcheck disable=SC2086
-                find "$APP_DIR" -maxdepth 1 -name "$pattern" -exec rm -rf {} + 2>/dev/null || true
+                for match in $APP_DIR/$pattern; do
+                  [ -e "$match" ] && rm -rf "$match"
+                done
               else
                 # Unrooted pattern: match recursively (like gitignore)
                 find "$APP_DIR" -name "$pattern" -exec rm -rf {} + 2>/dev/null || true
@@ -409,7 +411,10 @@ jobs:
                 [[ -z "$pattern" || "$pattern" == \#* ]] && continue
                 if [[ "$pattern" == /* ]]; then
                   pattern="${pattern#/}"
-                  find "$real_dir" -maxdepth 1 -name "$pattern" -exec rm -rf {} + 2>/dev/null || true
+                  # shellcheck disable=SC2086
+                  for match in $real_dir/$pattern; do
+                    [ -e "$match" ] && rm -rf "$match"
+                  done
                 else
                   find "$real_dir" -name "$pattern" -exec rm -rf {} + 2>/dev/null || true
                 fi
