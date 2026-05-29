@@ -216,7 +216,9 @@ jobs:
             done < .nextcloudignore
           fi
 
-          # Remove dev file patterns (replicates getDataToBeRemovedFromAppFolders + extras)
+          # Remove dev file patterns (replicates getDataToBeRemovedFromAppFolders)
+          # Only includes patterns from the original list + format variants
+          # App-specific cleanup is handled by each app's .nextcloudignore
           DEV_PATTERNS=(
             .babelrc .babelrc.js .codecov.yml .devcontainer .drone.yml .editorconfig
             .eslintrc.cjs .eslintrc.js .eslintrc.json .eslintignore
@@ -226,20 +228,15 @@ jobs:
             .stylelintrc.js .travis.yml .tx/
             babel.config.js babel.config.cjs build-js/ build.xml
             check-handlebars-templates.sh codecov.yml compile-handlebars-templates.sh
-            composer.json composer.lock
-            APPS.md AUTHORS.md CONTRIBUTING.md CHANGELOG.md
+            CONTRIBUTING.md
             cypress.config.js cypress.config.ts cypress.config.mjs cypress.json cypress/
-            doc/ docs/
             eslint.config.js eslint.config.mjs
             issue_template.md jest-raw-loader.js jest.config.js jsconfig.json
             krankerl.toml l10n/.gitkeep Makefile
-            package.json package-lock.json
-            playwright.config.js playwright.config.ts playwright.config.mjs playwright/
             postcss.config.js postcss.config.cjs psalm.xml
             .prettierignore prettier.config.js prettier.config.cjs
             README.md rector.php renovate.json screenshots/ src/
             stylelint.config.js stylelint.config.cjs tests/ tsconfig.json
-            vendor-bin/
             vite.config.js vite.config.ts vite.config.mjs
             vitest.config.js vitest.config.ts
             webpack.common.js webpack.config.js webpack.dev.js webpack.js webpack.prod.js
@@ -252,17 +249,6 @@ jobs:
               rm -rf "${pattern}.license"
             fi
           done
-
-      - name: Clean vendor dev artifacts
-        if: matrix.type == 'app'
-        run: |
-          # Remove .github, .gitattributes, .gitignore from inside vendor/ dirs
-          # These leak from composer dependencies
-          if [ -d vendor ]; then
-            find vendor -name .github -type d -exec rm -rf {} + 2>/dev/null || true
-            find vendor -name .gitattributes -delete 2>/dev/null || true
-            find vendor -name .gitignore -delete 2>/dev/null || true
-          fi
 
       - name: Remove .git and archive
         run: |
@@ -385,21 +371,15 @@ jobs:
             .stylelintrc.js .travis.yml .tx
             babel.config.js babel.config.cjs build-js build.xml
             check-handlebars-templates.sh codecov.yml compile-handlebars-templates.sh
-            composer.json composer.lock
-            APPS.md AUTHORS.md CONTRIBUTING.md CHANGELOG.md
+            CONTRIBUTING.md
             cypress.config.js cypress.config.ts cypress.config.mjs cypress.json cypress
-            doc docs
             eslint.config.js eslint.config.mjs
             issue_template.md jest-raw-loader.js jest.config.js jsconfig.json
             krankerl.toml l10n/.gitkeep Makefile
-            package.json package-lock.json
-            phpDocumentor.sh
-            playwright.config.js playwright.config.ts playwright.config.mjs playwright
             postcss.config.js postcss.config.cjs psalm.xml
             .prettierignore prettier.config.js prettier.config.cjs
             README.md rector.php renovate.json screenshots src
-            stylelint.config.js stylelint.config.cjs testConfiguration.json tests tsconfig.json
-            vendor-bin
+            stylelint.config.js stylelint.config.cjs tests tsconfig.json
             vite.config.js vite.config.ts vite.config.mjs
             vitest.config.js vitest.config.ts
             webpack.common.js webpack.config.js webpack.dev.js webpack.js webpack.prod.js
