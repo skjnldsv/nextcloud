@@ -1,165 +1,455 @@
-name: New Nextcloud release
+name: Build Nextcloud Release
 
 on:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 30.0.1, 31.0.0beta1)'
+        required: true
+        type: string
+      publish:
+        description: 'Create GitHub release with assets'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  COMPOSER_ALLOW_SUPERUSER: '1'
 
 jobs:
   init:
     runs-on: ubuntu-latest
     outputs:
-      apps: ${{ steps.matrix.outputs.matrix }}
+      matrix: ${{ steps.generate.outputs.matrix }}
+      branch: ${{ steps.parse.outputs.branch }}
+      channel: ${{ steps.parse.outputs.channel }}
+      major: ${{ steps.parse.outputs.major }}
 
     steps:
       - name: Checkout config
         uses: actions/checkout@v4
 
-      - name: Generate matrix
-        id: matrix
+      - name: Parse version
+        id: parse
         run: |
-          REPOS=$(cat "stable26.json" | jq -c)
-          echo "matrix=$REPOS" >> $GITHUB_OUTPUT
+          VERSION="${{ inputs.version }}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+
+          if [[ "$VERSION" =~ \.0\.0(alpha|beta) ]]; then
+            BRANCH="master"
+            CHANNEL="beta"
+          else
+            BRANCH="stable${MAJOR}"
+            CHANNEL="stable"
+          fi
+
+          echo "major=$MAJOR" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+
+          echo "::notice::Building NC${MAJOR} from ${BRANCH} (channel: ${CHANNEL})"
+
+      - name: Generate build matrix
+        id: generate
+        run: |
+          BRANCH="${{ steps.parse.outputs.branch }}"
+          MAJOR="${{ steps.parse.outputs.major }}"
+
+          if [ "$BRANCH" = "master" ]; then
+            CONFIG="master.json"
+          else
+            CONFIG="stable${MAJOR}.json"
+          fi
+
+          if [ ! -f "$CONFIG" ]; then
+            echo "::error::Config file $CONFIG not found. Create it for NC${MAJOR} releases."
+            exit 1
+          fi
+
+          MATRIX=$(jq -c \
+            --arg branch "$BRANCH" \
+            'map(. + {
+              branch: (.branch // $branch),
+              type: (.type // "app"),
+              run_composer: (.composer // false),
+              composer_args: (.composer_args // ""),
+              private: (.private // false)
+            })
+            | {include: .}
+            ' "$CONFIG")
+
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "Generated matrix with $(echo "$MATRIX" | jq '.include | length') entries"
 
   fetch-and-build:
     needs: init
     runs-on: ubuntu-latest
-
     strategy:
-      matrix: ${{ fromJSON(needs.init.outputs.apps) }}
+      fail-fast: true
+      matrix: ${{ fromJSON(needs.init.outputs.matrix) }}
 
     steps:
-      - name: Checkout repo
+      - name: Checkout ${{ matrix.id }}
         uses: actions/checkout@v4
         with:
-          repository: ${{ matrix.apps.repo}}
-          ref: ${{ matrix.apps.branch}}
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.branch }}
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
 
-      - name: Check composer file existence
-        id: check_composer
-        uses: andstor/file-existence-action@v3
-        with:
-          files: composer.json
+      - name: Save server commit hash
+        if: matrix.type == 'server'
+        run: git rev-parse HEAD > .release-commit-hash
 
-      - name: Set up dependencies
-        if: steps.check_composer.outputs.files_exists == 'true'
-        run: composer i --no-dev
-
-      - name: Check npm file existence
-        id: check_npm
-        uses: andstor/file-existence-action@v3
-        with:
-          files: package.json
-
-      - name: Read package.json node and npm engines version
-        if: steps.check_npm.outputs.files_exists == 'true'
-        uses: skjnldsv/read-package-engines-version-actions@v3
-        id: versions
-        with:
-          fallbackNode: '^16'
-          fallbackNpm: '^8'
-
-      - name: Set up node ${{ steps.versions.outputs.nodeVersion }}
-        if: steps.check_npm.outputs.files_exists == 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ steps.versions.outputs.nodeVersion }}
-
-      - name: Set up npm ${{ steps.versions.outputs.npmVersion }}
-        if: steps.check_npm.outputs.files_exists == 'true'
-        run: npm i -g npm@"${{ steps.versions.outputs.npmVersion }}"
-
-      - name: Install dependencies & build
-        if: steps.check_npm.outputs.files_exists == 'true'
-        run: |
-          npm ci
-          npm run build --if-present
-
-      - name: Process .nextcloudignore file
+      - name: Clean server dev files
+        if: matrix.type == 'server'
         run: |
           if [ -f ".nextcloudignore" ]; then
-            echo "Processing .nextcloudignore file..."
-            # Read each line from .nextcloudignore and remove matching files/directories
-            while IFS= read -r pattern || [[ -n "$pattern" ]]; do
-              # Skip empty lines and comments
-              [[ -z "$pattern" || "$pattern" =~ ^[[:space:]]*# ]] && continue
-              
-              echo "Removing files matching pattern: $pattern"
-              # Use find with -delete for safe removal, handle both files and directories
-              find . -path "./$pattern" -delete 2>/dev/null || true
-              # Also try glob pattern matching for shell patterns
-              rm -rf $pattern 2>/dev/null || true
-            done < .nextcloudignore
-            
-            echo "Finished processing .nextcloudignore"
+            echo "Using .nextcloudignore"
+            git ls-files -ic --exclude-from=.nextcloudignore -z | xargs -0 -r -n 10 -- rm -fr
+            find . -empty -type d -delete
           else
-            echo "No .nextcloudignore file found"
+            echo "Using hardcoded cleanup list (pre-NC25)"
+            rm -rf .babelrc .codecov.yml .devcontainer .drone.yml .editorconfig
+            rm -rf .envrc .eslintignore .eslintrc.js .git-blame-ignore-revs
+            rm -rf .gitattributes .github .gitignore .gitmodules .idea .jshintrc
+            rm -rf .mailmap .npmignore .php-cs-fixer.dist.php .php_cs.dist
+            rm -rf .pre-commit-config.yaml .scrutinizer.yml .tag .tx
+            rm -rf CHANGELOG.md CODE_OF_CONDUCT.md COPYING-README DESIGN.md
+            rm -rf Makefile README.md SECURITY.md __mocks__ __tests__
+            rm -rf apps/dav/bin apps/testing
+            rm -rf autotest-checkers.sh autotest-external.sh autotest-js.sh autotest.sh
+            rm -rf babel.config.js build codecov.yml contribute custom.d.ts
+            rm -rf cypress cypress.config.ts cypress.d.ts
+            rm -rf eslint.config.js eslint.config.mjs flake.lock flake.nix
+            rm -rf jest.config.js jest.config.ts openapi.json
+            rm -rf psalm-ncu.xml psalm-ocp.xml psalm.xml stylelint.config.js
+            rm -rf tests tsconfig.json vendor-bin vite.config.ts
+            rm -rf vitest.config.mts vitest.config.ts
+            rm -rf webpack.common.cjs webpack.common.js webpack.config.js
+            rm -rf webpack.dev.js webpack.modules.cjs webpack.modules.js webpack.prod.js
+            rm -rf window.d.ts
+            # Safety cleanup
+            rm -rf .direnv .well-known config/config.php data
           fi
-      
-      - name: Compress artifact
+
+      - name: Clean app dev files
+        if: matrix.type == 'app'
+        run: |
+          # Process .nextcloudignore (literal path matching)
+          # Replicates release script's removeIgnoredFiles() exactly
+          if [ -f ".nextcloudignore" ]; then
+            APP_DIR=$(pwd)
+            while IFS= read -r line || [[ -n "$line" ]]; do
+              pattern=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+              [[ -z "$pattern" || "$pattern" == \#* ]] && continue
+              target=$(realpath "$APP_DIR/$pattern" 2>/dev/null) || continue
+              [[ "$target" != "$APP_DIR/"* ]] && continue
+              [ -e "$pattern" ] && rm -rf "$pattern"
+            done < .nextcloudignore
+          fi
+
+          # Remove dev file patterns (replicates getDataToBeRemovedFromAppFolders)
+          DEV_PATTERNS=(
+            .babelrc .babelrc.js .codecov.yml .devcontainer .drone.yml .editorconfig
+            .eslintrc.cjs .eslintrc.js .eslintrc.json .eslintignore
+            .git/ .gitattributes .github .gitignore .git-blame-ignore-revs
+            .jshintrc .l10nignore .lgtm .nextcloudignore .npmignore .noopenapi
+            .php_cs.dist .php-cs-fixer.dist.php .scrutinizer.yml .stylelintignore
+            .stylelintrc.js .travis.yml .tx/
+            babel.config.js build-js/ build.xml
+            check-handlebars-templates.sh codecov.yml compile-handlebars-templates.sh
+            CONTRIBUTING.md cypress.config.js cypress.config.ts cypress.json cypress/
+            issue_template.md jest-raw-loader.js jest.config.js jsconfig.json
+            krankerl.toml l10n/.gitkeep Makefile postcss.config.js psalm.xml
+            README.md rector.php renovate.json screenshots/ src/
+            stylelint.config.js stylelint.config.cjs tests/ tsconfig.json
+            vite.config.js vite.config.ts vitest.config.js vitest.config.ts
+            webpack.common.js webpack.config.js webpack.dev.js webpack.js webpack.prod.js
+            phpDocumentor.sh testConfiguration.json
+          )
+
+          for pattern in "${DEV_PATTERNS[@]}"; do
+            rm -rf "$pattern"
+            # Also remove .license companion (unless pattern is a directory)
+            if [[ "$pattern" != */ ]]; then
+              rm -rf "${pattern}.license"
+            fi
+          done
+
+      - name: Set up PHP
+        if: matrix.run_composer == true
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer
+
+      - name: Run composer install
+        if: matrix.run_composer == true
+        run: composer install ${{ matrix.composer_args }}
+
+      - name: Remove .git and archive
         run: |
           rm -rf .git
-          tar -cf /tmp/${{ matrix.apps.id}}.tar .
+          tar -cf /tmp/${{ matrix.id }}.tar .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.apps.id}}
-          path: /tmp/${{ matrix.apps.id}}.tar
-  
+          name: ${{ matrix.id }}
+          path: /tmp/${{ matrix.id }}.tar
+          retention-days: 1
+
   assemble:
-    needs: fetch-and-build
+    needs: [init, fetch-and-build]
     runs-on: ubuntu-latest
 
     steps:
-      - name: Fetch artifacts
-        uses: actions/download-artifact@v5
-      
-      - name: Install dependencies
-        run: sudo apt-get install -y lbzip2
-      
-      - name: Decompress server
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+
+      - name: Extract server
         run: |
-          mkdir -p /tmp/server
-          tar -xf server/server.tar --directory /tmp/server
+          mkdir -p /tmp/nextcloud
+          tar -xf server/server.tar -C /tmp/nextcloud
           rm -rf server
 
-      - name: Decompress apps
+      - name: Replace 3rdparty
         run: |
-          echo "Available artifacts:"
-          ls -lah ./
-          
-          # Create apps directory if it doesn't exist
-          mkdir -p /tmp/server/apps
-          
-          # Process each app directory (excluding server which we already processed)
-          for app_dir in */; do
-            app_name=$(basename "$app_dir")
-            if [ "$app_name" != "server" ]; then
-              echo "Processing app: $app_name"
-              
-              # Find and extract the tar file for this app
-              if [ -f "$app_dir/$app_name.tar" ]; then
-                echo "Extracting $app_name.tar to /tmp/server/apps/$app_name"
-                mkdir -p "/tmp/server/apps/$app_name"
-                tar -xf "$app_dir/$app_name.tar" --directory "/tmp/server/apps/$app_name"
-                rm -f "$app_dir/$app_name.tar"
-              else
-                echo "Warning: No tar file found for app $app_name"
-              fi
-            fi
+          rm -rf /tmp/nextcloud/3rdparty
+          mkdir -p /tmp/nextcloud/3rdparty
+          tar -xf 3rdparty/3rdparty.tar -C /tmp/nextcloud/3rdparty
+          rm -rf 3rdparty
+          # Clean 3rdparty dev files (matches release script)
+          rm -rf /tmp/nextcloud/3rdparty/.github
+          rm -rf /tmp/nextcloud/3rdparty/.gitignore
+          rm -rf /tmp/nextcloud/3rdparty/README.md
+
+      - name: Extract apps
+        run: |
+          for artifact_dir in */; do
+            id=$(basename "$artifact_dir")
+            case "$id" in
+              updater|example-files) continue ;;
+            esac
+
+            echo "Extracting app: $id"
+            mkdir -p "/tmp/nextcloud/apps/$id"
+            tar -xf "$artifact_dir/$id.tar" -C "/tmp/nextcloud/apps/$id"
+            rm -rf "$artifact_dir"
           done
-          
-          echo "Final apps directory structure:"
-          ls -lah /tmp/server/apps/
 
-      - name: Create and compress release
+      - name: Bundle updater
         run: |
-          cd /tmp
-          tar -I lbzip2 -cf nextcloud.tar.bz2 server/
-          ls -lah nextcloud.tar.bz2
+          mkdir -p /tmp/updater-staging
+          tar -xf updater/updater.tar -C /tmp/updater-staging
+          rm -rf updater
 
-      - name: Upload release
+          mkdir -p /tmp/nextcloud/updater
+          cp /tmp/updater-staging/index.php /tmp/nextcloud/updater/index.php
+          cp /tmp/updater-staging/updater.phar /tmp/nextcloud/updater/updater.phar
+          rm -rf /tmp/updater-staging
+
+      - name: Bundle example files
+        run: |
+          rm -rf /tmp/nextcloud/core/skeleton
+          mkdir -p /tmp/nextcloud/core/skeleton
+          tar -xf example-files/example-files.tar -C /tmp/nextcloud/core/skeleton
+          rm -rf example-files
+
+      - name: Clean dev files from core apps, core/, and settings/
+        run: |
+          # Replicates createpackages() cleanup: runs on all apps/* plus core/ and settings/
+          # Separately-cloned apps were already cleaned in fetch-and-build (no-op here),
+          # but core apps shipped with server still need cleaning.
+
+          DEV_PATTERNS=(
+            .babelrc .babelrc.js .codecov.yml .devcontainer .drone.yml .editorconfig
+            .eslintrc.cjs .eslintrc.js .eslintrc.json .eslintignore
+            .gitattributes .github .gitignore .git-blame-ignore-revs
+            .jshintrc .l10nignore .lgtm .nextcloudignore .npmignore .noopenapi
+            .php_cs.dist .php-cs-fixer.dist.php .scrutinizer.yml .stylelintignore
+            .stylelintrc.js .travis.yml .tx
+            babel.config.js build-js build.xml
+            check-handlebars-templates.sh codecov.yml compile-handlebars-templates.sh
+            CONTRIBUTING.md cypress.config.js cypress.config.ts cypress.json cypress
+            issue_template.md jest-raw-loader.js jest.config.js jsconfig.json
+            krankerl.toml l10n/.gitkeep Makefile postcss.config.js psalm.xml
+            README.md rector.php renovate.json screenshots src
+            stylelint.config.js stylelint.config.cjs tests tsconfig.json
+            vite.config.js vite.config.ts vitest.config.js vitest.config.ts
+            webpack.common.js webpack.config.js webpack.dev.js webpack.js webpack.prod.js
+            phpDocumentor.sh testConfiguration.json
+          )
+
+          shopt -s nullglob
+          TARGET_DIRS=(/tmp/nextcloud/apps/*/ /tmp/nextcloud/core/ /tmp/nextcloud/settings/)
+          shopt -u nullglob
+
+          for dir in "${TARGET_DIRS[@]}"; do
+            [ -d "$dir" ] || continue
+
+            # Process .nextcloudignore if present (literal path matching)
+            if [ -f "$dir/.nextcloudignore" ]; then
+              real_dir=$(realpath "$dir")
+              while IFS= read -r line || [[ -n "$line" ]]; do
+                pattern=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                [[ -z "$pattern" || "$pattern" == \#* ]] && continue
+                target=$(realpath "$dir/$pattern" 2>/dev/null) || continue
+                [[ "$target" != "$real_dir/"* ]] && continue
+                [ -e "$dir/$pattern" ] && rm -rf "$dir/$pattern"
+              done < "$dir/.nextcloudignore"
+            fi
+
+            # Remove dev file patterns + .license companions
+            for pattern in "${DEV_PATTERNS[@]}"; do
+              rm -rf "$dir/$pattern"
+              if [[ "$pattern" != */ ]]; then
+                rm -rf "$dir/${pattern}.license"
+              fi
+            done
+          done
+
+      - name: Final cleanup
+        run: |
+          # Remove all remaining .git directories
+          find /tmp/nextcloud -name .git -exec rm -rf {} + 2>/dev/null || true
+          # Remove config.php if present
+          rm -f /tmp/nextcloud/config/config.php
+          # Remove data directory if present
+          rm -rf /tmp/nextcloud/data
+
+      - name: Update version.php
+        env:
+          CHANNEL: ${{ needs.init.outputs.channel }}
+          BRANCH: ${{ needs.init.outputs.branch }}
+        run: |
+          COMMIT_HASH=$(cat /tmp/nextcloud/.release-commit-hash)
+          rm -f /tmp/nextcloud/.release-commit-hash
+          export BUILD_STRING="$(date -u +%Y-%m-%dT%H:%M:%S+00:00) ${COMMIT_HASH}"
+
+          php << 'EOPHP'
+          <?php
+          $file = '/tmp/nextcloud/version.php';
+          require($file);
+          $channel = getenv('CHANNEL');
+          $branch = getenv('BRANCH');
+          $build = getenv('BUILD_STRING');
+
+          $content = "<?php \n";
+          $content .= '$OC_Version = array(' . implode(',', $OC_Version) . ')' . ";\n";
+          $content .= '$OC_VersionString = \'' . $OC_VersionString . "';\n";
+          if ($branch !== 'master') {
+              $content .= '$OC_Edition = \'' . "';\n";
+          }
+          $content .= '$OC_Channel = \'' . $channel . "';\n";
+          if (isset($OC_VersionCanBeUpgradedFrom)) {
+              $content .= '$OC_VersionCanBeUpgradedFrom = ' . var_export($OC_VersionCanBeUpgradedFrom, true) . ";\n";
+          }
+          $content .= '$OC_Build = \'' . $build . "';\n";
+          $content .= '$vendor = \'nextcloud\';' . "\n";
+
+          file_put_contents($file, $content);
+          echo "version.php updated: channel=$channel build=$build\n";
+          EOPHP
+
+      - name: Set permissions and create archives
+        run: |
+          VERSION="${{ inputs.version }}"
+
+          # Match release script permissions exactly
+          find /tmp/nextcloud -type d -exec chmod 755 {} \;
+          find /tmp/nextcloud -type f -exec chmod 644 {} \;
+          sudo chown -R nobody:nogroup /tmp/nextcloud
+
+          cd /tmp
+          mkdir -p "$GITHUB_WORKSPACE/releases"
+          sudo tar jcf "$GITHUB_WORKSPACE/releases/nextcloud-${VERSION}.tar.bz2" nextcloud --format=gnu
+          sudo zip -rq9 "$GITHUB_WORKSPACE/releases/nextcloud-${VERSION}.zip" nextcloud
+
+          echo "Archives created:"
+          ls -lh "$GITHUB_WORKSPACE/releases/"
+
+      - name: Generate checksums
+        run: |
+          cd "$GITHUB_WORKSPACE/releases"
+          for file in nextcloud-*; do
+            [[ "$file" == *.sha256 || "$file" == *.sha512 || "$file" == *.md5 ]] && continue
+            sha256sum "$file" > "${file}.sha256"
+            sha512sum "$file" > "${file}.sha512"
+            md5sum "$file" > "${file}.md5"
+          done
+
+          echo "Checksums:"
+          cat *.sha256
+
+      - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: nextcloud
-          path: /tmp/nextcloud.tar.bz2
+          name: release
+          path: releases/
+
+  publish:
+    needs: [init, assemble]
+    runs-on: ubuntu-latest
+    if: inputs.publish
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: releases/
+
+      - name: Determine release flags
+        id: flags
+        run: |
+          VERSION="${{ inputs.version }}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+
+          # Get latest major from master to determine --latest
+          LATEST_MAJOR=$(curl -sf https://raw.githubusercontent.com/nextcloud/server/refs/heads/master/version.php \
+            | grep '$OC_Version =' | cut -d',' -f1 | cut -d'[' -f2 | tr -d ' ')
+          STABLE_MAJOR=$((LATEST_MAJOR - 1))
+
+          FLAGS=""
+          if [[ "${VERSION,,}" =~ alpha|beta|rc ]]; then
+            FLAGS="--prerelease"
+            echo "::notice::Pre-release detected"
+          elif [[ "$MAJOR" == "$STABLE_MAJOR" ]]; then
+            FLAGS="--latest"
+            echo "::notice::Latest stable release (NC${MAJOR})"
+          fi
+
+          echo "flags=$FLAGS" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release on nextcloud-releases/server
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          FLAGS="${{ steps.flags.outputs.flags }}"
+
+          gh release create "v${VERSION}" \
+            --repo nextcloud-releases/server \
+            --title "v${VERSION}" \
+            --notes "" \
+            $FLAGS \
+            releases/*
+
+      - name: Create reference release on nextcloud/server
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          FLAGS="${{ steps.flags.outputs.flags }}"
+
+          gh release create "v${VERSION}" \
+            --repo nextcloud/server \
+            --title "v${VERSION}" \
+            --notes "https://github.com/nextcloud-releases/server/releases/tag/v${VERSION}" \
+            $FLAGS
