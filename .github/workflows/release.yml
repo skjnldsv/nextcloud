@@ -208,11 +208,15 @@ jobs:
           if [ -f ".nextcloudignore" ]; then
             APP_DIR=$(pwd)
             while IFS= read -r line || [[ -n "$line" ]]; do
-              pattern=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+              # Trim whitespace and carriage returns
+              pattern=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/\r$//')
               [[ -z "$pattern" || "$pattern" == \#* ]] && continue
+              # Strip leading slash (entries like /vendor-bin are relative to app root)
+              pattern="${pattern#/}"
+              [[ -z "$pattern" ]] && continue
               target=$(realpath "$APP_DIR/$pattern" 2>/dev/null) || continue
               [[ "$target" != "$APP_DIR/"* ]] && continue
-              [ -e "$pattern" ] && rm -rf "$pattern"
+              [ -e "$APP_DIR/$pattern" ] && rm -rf "$APP_DIR/$pattern"
             done < .nextcloudignore
           fi
 
@@ -396,8 +400,10 @@ jobs:
             if [ -f "$dir/.nextcloudignore" ]; then
               real_dir=$(realpath "$dir")
               while IFS= read -r line || [[ -n "$line" ]]; do
-                pattern=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                pattern=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/\r$//')
                 [[ -z "$pattern" || "$pattern" == \#* ]] && continue
+                pattern="${pattern#/}"
+                [[ -z "$pattern" ]] && continue
                 target=$(realpath "$dir/$pattern" 2>/dev/null) || continue
                 [[ "$target" != "$real_dir/"* ]] && continue
                 [ -e "$dir/$pattern" ] && rm -rf "$dir/$pattern"
@@ -731,7 +737,13 @@ jobs:
           grep -v -E "$KNOWN_PATTERN" /tmp/only-in-new.txt || echo "(none)"
 
           # Fail if unexpected missing files
+          FAIL=0
           if [ "$UNEXPECTED_MISSING" -gt 0 ]; then
             echo "::error::${UNEXPECTED_MISSING} unexpected files missing from build"
-            exit 1
+            FAIL=1
           fi
+          if [ "$UNEXPECTED_EXTRA" -gt 0 ]; then
+            echo "::error::${UNEXPECTED_EXTRA} unexpected extra files in build"
+            FAIL=1
+          fi
+          exit $FAIL
