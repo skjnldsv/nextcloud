@@ -87,13 +87,44 @@ jobs:
     continue-on-error: true
 
     steps:
-      - name: Build documentation
+      - name: Checkout documentation (gh-pages)
+        uses: actions/checkout@v4
+        with:
+          repository: nextcloud/documentation
+          ref: gh-pages
+
+      - name: Extract docs for version
         run: |
-          BRANCH="${{ needs.init.outputs.branch }}"
-          mkdir -p /tmp/docs
-          docker run --rm -v /tmp/docs:/dest \
-            ${{ vars.DOCS_IMAGE || secrets.DOCS_IMAGE || 'ghcr.io/nextcloud/docs-automater:latest' }} \
-            /build-release.sh "$BRANCH"
+          MAJOR="${{ needs.init.outputs.major }}"
+          echo "Looking for docs for NC${MAJOR}..."
+          ls -la
+
+          mkdir -p /tmp/docs/user_manual/en /tmp/docs/admin_manual
+
+          # Detect docs structure and copy
+          for base in "server/${MAJOR}" "server/stable${MAJOR}" "${MAJOR}" "."; do
+            if [ -d "${base}/user_manual/en" ]; then
+              echo "Found user docs at ${base}/user_manual/en"
+              cp -a "${base}/user_manual/en/"* /tmp/docs/user_manual/en/
+              break
+            fi
+          done
+
+          for base in "server/${MAJOR}" "server/stable${MAJOR}" "${MAJOR}" "."; do
+            if [ -d "${base}/admin_manual" ]; then
+              echo "Found admin docs at ${base}/admin_manual"
+              cp -a "${base}/admin_manual/"* /tmp/docs/admin_manual/
+              break
+            fi
+          done
+
+          # PDF if available
+          find . -name "Nextcloud_User_Manual.pdf" -exec cp -a {} /tmp/docs/ \; 2>/dev/null
+
+          echo "Docs contents:"
+          ls -la /tmp/docs/
+          ls -la /tmp/docs/user_manual/en/ | head -5
+          ls -la /tmp/docs/admin_manual/ | head -5
 
       - name: Package docs
         run: tar -cf /tmp/docs.tar -C /tmp/docs .
@@ -417,14 +448,23 @@ jobs:
       - name: Sign release
         env:
           SIGN_KEY: ${{ secrets.SIGN_PRIVATE_KEY }}
+          SIGN_CERT: ${{ secrets.SIGN_CERTIFICATE }}
         run: |
           if [ -z "$SIGN_KEY" ]; then
             echo "::warning::SIGN_PRIVATE_KEY secret not set, skipping code signing"
             exit 0
           fi
 
-          echo "$SIGN_KEY" > /tmp/signing-key.pem
           NC=/tmp/nextcloud
+          echo "$SIGN_KEY" > /tmp/signing-key.pem
+
+          # Use secret cert if provided, otherwise fall back to repo cert
+          if [ -n "$SIGN_CERT" ]; then
+            echo "$SIGN_CERT" > /tmp/signing-cert.pem
+            CERT=/tmp/signing-cert.pem
+          else
+            CERT="$NC/resources/codesigning/core.crt"
+          fi
 
           # Make occ usable
           chmod 755 "$NC/occ"
@@ -433,7 +473,7 @@ jobs:
           echo "Signing core..."
           php "$NC/occ" integrity:sign-core \
             --privateKey=/tmp/signing-key.pem \
-            --certificate="$NC/resources/codesigning/core.crt" \
+            --certificate="$CERT" \
             --path "$NC"
 
           echo "Signing apps..."
@@ -442,12 +482,12 @@ jobs:
             echo "  Signing $app_name"
             php "$NC/occ" integrity:sign-app \
               --privateKey=/tmp/signing-key.pem \
-              --certificate="$NC/resources/codesigning/core.crt" \
+              --certificate="$CERT" \
               --path="$app_dir"
           done
 
           # Cleanup signing artifacts
-          rm -f /tmp/signing-key.pem
+          rm -f /tmp/signing-key.pem /tmp/signing-cert.pem
           rm -f "$NC/config/config.php"
 
           echo "Signing complete"
