@@ -100,6 +100,39 @@ jobs:
         if: matrix.type == 'server'
         run: git rev-parse HEAD > .release-commit-hash
 
+      - name: Check npm file existence
+        id: check_npm
+        uses: andstor/file-existence-action@v3
+        with:
+          files: package.json
+
+      - name: Read package.json node and npm engines version
+        if: steps.check_npm.outputs.files_exists == 'true'
+        uses: skjnldsv/read-package-engines-version-actions@v3
+        id: versions
+        with:
+          fallbackNode: '^20'
+          fallbackNpm: '^10'
+
+      - name: Set up node ${{ steps.versions.outputs.nodeVersion }}
+        if: steps.check_npm.outputs.files_exists == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.versions.outputs.nodeVersion }}
+
+      - name: Set up npm ${{ steps.versions.outputs.npmVersion }}
+        if: steps.check_npm.outputs.files_exists == 'true'
+        run: npm i -g npm@"${{ steps.versions.outputs.npmVersion }}"
+
+      - name: Install npm dependencies and build
+        if: steps.check_npm.outputs.files_exists == 'true'
+        run: |
+          npm ci
+          npm run build --if-present
+
+      - name: Remove node_modules
+        run: rm -rf node_modules
+
       - name: Clean server dev files
         if: matrix.type == 'server'
         run: |
@@ -453,3 +486,115 @@ jobs:
             --title "v${VERSION}" \
             --notes "https://github.com/nextcloud-releases/server/releases/tag/v${VERSION}" \
             $FLAGS
+
+  compare:
+    needs: [init, assemble]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Download workflow build
+        uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: /tmp/new-release
+
+      - name: Download existing release
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          mkdir -p /tmp/existing-release
+          if gh release download "v${VERSION}" \
+            --repo nextcloud-releases/server \
+            --pattern "nextcloud-${VERSION}.tar.bz2" \
+            --dir /tmp/existing-release 2>/dev/null; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No existing release v${VERSION} found, skipping comparison"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compare file lists
+        if: steps.download.outputs.found == 'true'
+        run: |
+          VERSION="${{ inputs.version }}"
+
+          echo "Extracting existing release..."
+          mkdir -p /tmp/existing
+          tar -xf "/tmp/existing-release/nextcloud-${VERSION}.tar.bz2" -C /tmp/existing
+
+          echo "Extracting new build..."
+          mkdir -p /tmp/new
+          cd /tmp/new
+          sudo tar -xf "/tmp/new-release/nextcloud-${VERSION}.tar.bz2"
+          cd /
+
+          # Generate sorted file lists (paths only, no content)
+          (cd /tmp/existing && find . -type f | sort) > /tmp/existing-files.txt
+          (cd /tmp/new && find . -type f | sort) > /tmp/new-files.txt
+
+          # Compute diffs
+          comm -23 /tmp/existing-files.txt /tmp/new-files.txt > /tmp/only-in-existing.txt
+          comm -13 /tmp/existing-files.txt /tmp/new-files.txt > /tmp/only-in-new.txt
+
+          EXISTING_COUNT=$(wc -l < /tmp/existing-files.txt)
+          NEW_COUNT=$(wc -l < /tmp/new-files.txt)
+          MISSING=$(wc -l < /tmp/only-in-existing.txt)
+          EXTRA=$(wc -l < /tmp/only-in-new.txt)
+
+          # Build step summary
+          {
+            echo "## Release Comparison: v${VERSION}"
+            echo ""
+            echo "| | Files |"
+            echo "|---|---|"
+            echo "| Existing release | ${EXISTING_COUNT} |"
+            echo "| New build | ${NEW_COUNT} |"
+            echo "| Missing from new build | ${MISSING} |"
+            echo "| Extra in new build | ${EXTRA} |"
+            echo ""
+
+            if [ "$MISSING" -eq 0 ] && [ "$EXTRA" -eq 0 ]; then
+              echo "### ✅ File lists are identical"
+            fi
+
+            if [ "$MISSING" -gt 0 ]; then
+              echo "### ❌ Files only in existing release (${MISSING})"
+              echo ""
+              echo "<details><summary>Show files</summary>"
+              echo ""
+              echo '```'
+              cat /tmp/only-in-existing.txt
+              echo '```'
+              echo "</details>"
+              echo ""
+            fi
+
+            if [ "$EXTRA" -gt 0 ]; then
+              echo "### ➕ Files only in new build (${EXTRA})"
+              echo ""
+              echo "<details><summary>Show files</summary>"
+              echo ""
+              echo '```'
+              cat /tmp/only-in-new.txt
+              echo '```'
+              echo "</details>"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Also print to log
+          echo "=== Missing from new build ==="
+          cat /tmp/only-in-existing.txt
+          echo "=== Extra in new build ==="
+          cat /tmp/only-in-new.txt
+
+          # Fail if unexpected differences (ignoring known diffs)
+          # Known: signature.json files (signing not in workflow), doc/ files
+          UNEXPECTED_MISSING=$(grep -v -E '(signature\.json|core/doc/)' /tmp/only-in-existing.txt | wc -l)
+          if [ "$UNEXPECTED_MISSING" -gt 0 ]; then
+            echo "::error::${UNEXPECTED_MISSING} unexpected files missing from build"
+            grep -v -E '(signature\.json|core/doc/)' /tmp/only-in-existing.txt
+            exit 1
+          fi
