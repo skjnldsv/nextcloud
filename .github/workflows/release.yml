@@ -261,6 +261,9 @@ jobs:
             fi
           done
 
+          # Catch-all: any *.config.{js,ts,mjs,cjs} is a dev config that shouldn't ship
+          find . -maxdepth 1 \( -name "*.config.js" -o -name "*.config.ts" -o -name "*.config.mjs" -o -name "*.config.cjs" \) -delete 2>/dev/null || true
+
       - name: Remove .git and archive
         run: |
           rm -rf .git
@@ -428,6 +431,9 @@ jobs:
                 rm -rf "$dir/${pattern}.license"
               fi
             done
+
+            # Catch-all: any *.config.{js,ts,mjs,cjs} is a dev config
+            find "$dir" -maxdepth 1 \( -name "*.config.js" -o -name "*.config.ts" -o -name "*.config.mjs" -o -name "*.config.cjs" \) -delete 2>/dev/null || true
           done
 
       - name: Final cleanup
