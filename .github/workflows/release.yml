@@ -81,6 +81,30 @@ jobs:
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
           echo "Generated matrix with $(echo "$MATRIX" | jq '.include | length') entries"
 
+  build-docs:
+    needs: init
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Build documentation
+        run: |
+          BRANCH="${{ needs.init.outputs.branch }}"
+          mkdir -p /tmp/docs
+          docker run --rm -v /tmp/docs:/dest \
+            ${{ vars.DOCS_IMAGE || secrets.DOCS_IMAGE || 'ghcr.io/nextcloud/docs-automater:latest' }} \
+            /build-release.sh "$BRANCH"
+
+      - name: Package docs
+        run: tar -cf /tmp/docs.tar -C /tmp/docs .
+
+      - name: Upload docs
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs
+          path: /tmp/docs.tar
+          retention-days: 1
+
   fetch-and-build:
     needs: init
     runs-on: ubuntu-latest
@@ -100,39 +124,19 @@ jobs:
         if: matrix.type == 'server'
         run: git rev-parse HEAD > .release-commit-hash
 
-      - name: Check npm file existence
-        id: check_npm
-        uses: andstor/file-existence-action@v3
+      # Build steps run BEFORE cleanup (release script order: clone → build → clean)
+      - name: Set up PHP
+        if: matrix.run_composer == true
+        uses: shivammathur/setup-php@v2
         with:
-          files: package.json
+          php-version: '8.3'
+          tools: composer
 
-      - name: Read package.json node and npm engines version
-        if: steps.check_npm.outputs.files_exists == 'true'
-        uses: skjnldsv/read-package-engines-version-actions@v3
-        id: versions
-        with:
-          fallbackNode: '^20'
-          fallbackNpm: '^10'
+      - name: Run composer install
+        if: matrix.run_composer == true
+        run: composer install ${{ matrix.composer_args }}
 
-      - name: Set up node ${{ steps.versions.outputs.nodeVersion }}
-        if: steps.check_npm.outputs.files_exists == 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ steps.versions.outputs.nodeVersion }}
-
-      - name: Set up npm ${{ steps.versions.outputs.npmVersion }}
-        if: steps.check_npm.outputs.files_exists == 'true'
-        run: npm i -g npm@"${{ steps.versions.outputs.npmVersion }}"
-
-      - name: Install npm dependencies and build
-        if: steps.check_npm.outputs.files_exists == 'true'
-        run: |
-          npm ci
-          npm run build --if-present
-
-      - name: Remove node_modules
-        run: rm -rf node_modules
-
+      # Cleanup steps run AFTER build
       - name: Clean server dev files
         if: matrix.type == 'server'
         run: |
@@ -198,7 +202,6 @@ jobs:
             stylelint.config.js stylelint.config.cjs tests/ tsconfig.json
             vite.config.js vite.config.ts vitest.config.js vitest.config.ts
             webpack.common.js webpack.config.js webpack.dev.js webpack.js webpack.prod.js
-            phpDocumentor.sh testConfiguration.json
           )
 
           for pattern in "${DEV_PATTERNS[@]}"; do
@@ -208,17 +211,6 @@ jobs:
               rm -rf "${pattern}.license"
             fi
           done
-
-      - name: Set up PHP
-        if: matrix.run_composer == true
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.3'
-          tools: composer
-
-      - name: Run composer install
-        if: matrix.run_composer == true
-        run: composer install ${{ matrix.composer_args }}
 
       - name: Remove .git and archive
         run: |
@@ -233,7 +225,8 @@ jobs:
           retention-days: 1
 
   assemble:
-    needs: [init, fetch-and-build]
+    needs: [init, fetch-and-build, build-docs]
+    if: always() && needs.fetch-and-build.result == 'success'
     runs-on: ubuntu-latest
 
     steps:
@@ -267,7 +260,7 @@ jobs:
           for artifact_dir in */; do
             id=$(basename "$artifact_dir")
             case "$id" in
-              updater|example-files) continue ;;
+              updater|example-files|docs|release) continue ;;
             esac
 
             echo "Extracting app: $id"
@@ -293,6 +286,37 @@ jobs:
           mkdir -p /tmp/nextcloud/core/skeleton
           tar -xf example-files/example-files.tar -C /tmp/nextcloud/core/skeleton
           rm -rf example-files
+
+      - name: Integrate documentation
+        run: |
+          if [ -f docs/docs.tar ]; then
+            echo "Integrating documentation..."
+            rm -f /tmp/nextcloud/core/doc/user/index.php
+            rm -f /tmp/nextcloud/core/doc/admin/index.php
+
+            mkdir -p /tmp/docs-staging
+            tar -xf docs/docs.tar -C /tmp/docs-staging
+
+            # Copy user docs (NC20+ uses en/ subfolder)
+            if [ -d /tmp/docs-staging/user_manual/en ]; then
+              cp -a /tmp/docs-staging/user_manual/en/* /tmp/nextcloud/core/doc/user/
+            fi
+
+            # Copy admin docs
+            if [ -d /tmp/docs-staging/admin_manual ]; then
+              cp -a /tmp/docs-staging/admin_manual/* /tmp/nextcloud/core/doc/admin/
+            fi
+
+            # Copy PDF to skeleton
+            if [ -f /tmp/docs-staging/Nextcloud_User_Manual.pdf ]; then
+              cp -a "/tmp/docs-staging/Nextcloud_User_Manual.pdf" "/tmp/nextcloud/core/skeleton/Nextcloud Manual.pdf"
+            fi
+
+            rm -rf /tmp/docs-staging docs
+          else
+            echo "::warning::Documentation not available, skipping"
+            rm -rf docs
+          fi
 
       - name: Clean dev files from core apps, core/, and settings/
         run: |
@@ -389,6 +413,44 @@ jobs:
           file_put_contents($file, $content);
           echo "version.php updated: channel=$channel build=$build\n";
           EOPHP
+
+      - name: Sign release
+        env:
+          SIGN_KEY: ${{ secrets.SIGN_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SIGN_KEY" ]; then
+            echo "::warning::SIGN_PRIVATE_KEY secret not set, skipping code signing"
+            exit 0
+          fi
+
+          echo "$SIGN_KEY" > /tmp/signing-key.pem
+          NC=/tmp/nextcloud
+
+          # Make occ usable
+          chmod 755 "$NC/occ"
+          chmod 777 "$NC/config"
+
+          echo "Signing core..."
+          php "$NC/occ" integrity:sign-core \
+            --privateKey=/tmp/signing-key.pem \
+            --certificate="$NC/resources/codesigning/core.crt" \
+            --path "$NC"
+
+          echo "Signing apps..."
+          for app_dir in "$NC"/apps/*/; do
+            app_name=$(basename "$app_dir")
+            echo "  Signing $app_name"
+            php "$NC/occ" integrity:sign-app \
+              --privateKey=/tmp/signing-key.pem \
+              --certificate="$NC/resources/codesigning/core.crt" \
+              --path="$app_dir"
+          done
+
+          # Cleanup signing artifacts
+          rm -f /tmp/signing-key.pem
+          rm -f "$NC/config/config.php"
+
+          echo "Signing complete"
 
       - name: Set permissions and create archives
         run: |
@@ -489,6 +551,7 @@ jobs:
 
   compare:
     needs: [init, assemble]
+    if: always() && needs.assemble.result == 'success'
     runs-on: ubuntu-latest
     continue-on-error: true
 
@@ -544,6 +607,14 @@ jobs:
           MISSING=$(wc -l < /tmp/only-in-existing.txt)
           EXTRA=$(wc -l < /tmp/only-in-new.txt)
 
+          # Filter out known expected differences for reporting
+          # - signature.json: only present when signing key is configured
+          # - core/doc/: only present when docs image is configured
+          # - Nextcloud Manual.pdf: part of docs generation
+          KNOWN_PATTERN='(signature\.json|core/doc/|Nextcloud Manual\.pdf)'
+          UNEXPECTED_MISSING=$(grep -v -E "$KNOWN_PATTERN" /tmp/only-in-existing.txt | wc -l)
+          UNEXPECTED_EXTRA=$(grep -v -E "$KNOWN_PATTERN" /tmp/only-in-new.txt | wc -l)
+
           # Build step summary
           {
             echo "## Release Comparison: v${VERSION}"
@@ -552,49 +623,59 @@ jobs:
             echo "|---|---|"
             echo "| Existing release | ${EXISTING_COUNT} |"
             echo "| New build | ${NEW_COUNT} |"
-            echo "| Missing from new build | ${MISSING} |"
-            echo "| Extra in new build | ${EXTRA} |"
+            echo "| Missing from new build | ${MISSING} (${UNEXPECTED_MISSING} unexpected) |"
+            echo "| Extra in new build | ${EXTRA} (${UNEXPECTED_EXTRA} unexpected) |"
             echo ""
 
-            if [ "$MISSING" -eq 0 ] && [ "$EXTRA" -eq 0 ]; then
-              echo "### ✅ File lists are identical"
+            if [ "$UNEXPECTED_MISSING" -eq 0 ] && [ "$UNEXPECTED_EXTRA" -eq 0 ]; then
+              echo "### ✅ All differences are expected (signing/docs)"
             fi
 
-            if [ "$MISSING" -gt 0 ]; then
-              echo "### ❌ Files only in existing release (${MISSING})"
+            if [ "$UNEXPECTED_MISSING" -gt 0 ]; then
+              echo "### ❌ Unexpected files missing from new build (${UNEXPECTED_MISSING})"
               echo ""
               echo "<details><summary>Show files</summary>"
               echo ""
               echo '```'
-              cat /tmp/only-in-existing.txt
+              grep -v -E "$KNOWN_PATTERN" /tmp/only-in-existing.txt
               echo '```'
               echo "</details>"
               echo ""
             fi
 
-            if [ "$EXTRA" -gt 0 ]; then
-              echo "### ➕ Files only in new build (${EXTRA})"
+            if [ "$UNEXPECTED_EXTRA" -gt 0 ]; then
+              echo "### ➕ Unexpected extra files in new build (${UNEXPECTED_EXTRA})"
               echo ""
               echo "<details><summary>Show files</summary>"
               echo ""
               echo '```'
-              cat /tmp/only-in-new.txt
+              grep -v -E "$KNOWN_PATTERN" /tmp/only-in-new.txt
+              echo '```'
+              echo "</details>"
+              echo ""
+            fi
+
+            if [ "$MISSING" -gt "$UNEXPECTED_MISSING" ]; then
+              EXPECTED_MISSING=$((MISSING - UNEXPECTED_MISSING))
+              echo "### Expected differences (${EXPECTED_MISSING} files)"
+              echo ""
+              echo "<details><summary>Show files</summary>"
+              echo ""
+              echo '```'
+              grep -E "$KNOWN_PATTERN" /tmp/only-in-existing.txt
               echo '```'
               echo "</details>"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           # Also print to log
-          echo "=== Missing from new build ==="
-          cat /tmp/only-in-existing.txt
-          echo "=== Extra in new build ==="
-          cat /tmp/only-in-new.txt
+          echo "=== Unexpected missing from new build ==="
+          grep -v -E "$KNOWN_PATTERN" /tmp/only-in-existing.txt || echo "(none)"
+          echo "=== Unexpected extra in new build ==="
+          grep -v -E "$KNOWN_PATTERN" /tmp/only-in-new.txt || echo "(none)"
 
-          # Fail if unexpected differences (ignoring known diffs)
-          # Known: signature.json files (signing not in workflow), doc/ files
-          UNEXPECTED_MISSING=$(grep -v -E '(signature\.json|core/doc/)' /tmp/only-in-existing.txt | wc -l)
+          # Fail if unexpected missing files
           if [ "$UNEXPECTED_MISSING" -gt 0 ]; then
             echo "::error::${UNEXPECTED_MISSING} unexpected files missing from build"
-            grep -v -E '(signature\.json|core/doc/)' /tmp/only-in-existing.txt
             exit 1
           fi
