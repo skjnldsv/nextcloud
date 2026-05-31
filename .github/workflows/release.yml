@@ -532,11 +532,10 @@ jobs:
 
       - name: Generate metadata file
         if: needs.init.outputs.major >= 30
-        env:
-          START_TIME: ${{ github.event.workflow_run.created_at || github.event.repository.updated_at }}
         run: |
           VERSION="${{ inputs.version }}"
           NC=/tmp/nextcloud
+          START_TS=$(date +%s)
 
           # Install Nextcloud to a temp location for metadata generation
           INSTALL_DIR=$(mktemp -d)
@@ -549,27 +548,37 @@ jobs:
             --admin-user admin --admin-pass admin 2>&1 || true
 
           echo "Generating migration metadata..."
-          METADATA_JSON=$(php "$INSTALL_DIR/nextcloud/occ" migrations:generate-metadata 2>/dev/null) || true
+          php "$INSTALL_DIR/nextcloud/occ" migrations:generate-metadata > /tmp/metadata-raw.json 2>/dev/null || true
 
-          if [ -n "$METADATA_JSON" ]; then
-            # Add build info and write metadata file
-            START_TS=$(date -d "${START_TIME:-now}" +%s 2>/dev/null || date +%s)
+          if [ -s /tmp/metadata-raw.json ]; then
             NOW_TS=$(date +%s)
             DURATION=$((NOW_TS - START_TS))
-
             mkdir -p "$GITHUB_WORKSPACE/releases"
-            php -r "
-              \$meta = json_decode('$METADATA_JSON', true) ?: [];
-              \$meta['build'] = ['initiated' => $START_TS, 'duration' => $DURATION];
-              file_put_contents('$GITHUB_WORKSPACE/releases/nextcloud-${VERSION}.metadata',
-                json_encode(\$meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-            "
-            echo "Metadata file created"
+
+            export METADATA_FILE="/tmp/metadata-raw.json"
+            export OUTPUT_FILE="$GITHUB_WORKSPACE/releases/nextcloud-${VERSION}.metadata"
+            export BUILD_START="$START_TS"
+            export BUILD_DURATION="$DURATION"
+
+            php << 'EOPHP'
+            <?php
+            $raw = file_get_contents(getenv('METADATA_FILE'));
+            $meta = json_decode($raw, true) ?: [];
+            $meta['build'] = [
+                'initiated' => (int)getenv('BUILD_START'),
+                'duration' => (int)getenv('BUILD_DURATION'),
+            ];
+            file_put_contents(
+                getenv('OUTPUT_FILE'),
+                json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)
+            );
+            echo "Metadata file created\n";
+            EOPHP
           else
             echo "::warning::Could not generate metadata"
           fi
 
-          rm -rf "$INSTALL_DIR"
+          rm -rf "$INSTALL_DIR" /tmp/metadata-raw.json
 
       - name: Set permissions and create archives
         run: |
