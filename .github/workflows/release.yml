@@ -280,6 +280,8 @@ jobs:
     needs: [init, fetch-and-build, build-docs]
     if: always() && needs.fetch-and-build.result == 'success'
     runs-on: ubuntu-latest
+    outputs:
+      commit_hash: ${{ steps.version.outputs.commit_hash }}
 
     steps:
       - name: Download all artifacts
@@ -446,12 +448,14 @@ jobs:
           rm -rf /tmp/nextcloud/data
 
       - name: Update version.php
+        id: version
         env:
           CHANNEL: ${{ needs.init.outputs.channel }}
           BRANCH: ${{ needs.init.outputs.branch }}
         run: |
           COMMIT_HASH=$(cat /tmp/nextcloud/.release-commit-hash)
           rm -f /tmp/nextcloud/.release-commit-hash
+          echo "commit_hash=$COMMIT_HASH" >> "$GITHUB_OUTPUT"
           export BUILD_STRING="$(date -u +%Y-%m-%dT%H:%M:%S+00:00) ${COMMIT_HASH}"
 
           php << 'EOPHP'
@@ -525,6 +529,47 @@ jobs:
           rm -f "$NC/config/config.php"
 
           echo "Signing complete"
+
+      - name: Generate metadata file
+        if: needs.init.outputs.major >= 30
+        env:
+          START_TIME: ${{ github.event.workflow_run.created_at || github.event.repository.updated_at }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          NC=/tmp/nextcloud
+
+          # Install Nextcloud to a temp location for metadata generation
+          INSTALL_DIR=$(mktemp -d)
+          cp -a "$NC" "$INSTALL_DIR/nextcloud"
+          chmod 755 "$INSTALL_DIR/nextcloud/occ"
+          chmod 777 "$INSTALL_DIR/nextcloud/config"
+
+          echo "Installing Nextcloud for metadata generation..."
+          php "$INSTALL_DIR/nextcloud/occ" maintenance:install \
+            --admin-user admin --admin-pass admin 2>&1 || true
+
+          echo "Generating migration metadata..."
+          METADATA_JSON=$(php "$INSTALL_DIR/nextcloud/occ" migrations:generate-metadata 2>/dev/null) || true
+
+          if [ -n "$METADATA_JSON" ]; then
+            # Add build info and write metadata file
+            START_TS=$(date -d "${START_TIME:-now}" +%s 2>/dev/null || date +%s)
+            NOW_TS=$(date +%s)
+            DURATION=$((NOW_TS - START_TS))
+
+            mkdir -p "$GITHUB_WORKSPACE/releases"
+            php -r "
+              \$meta = json_decode('$METADATA_JSON', true) ?: [];
+              \$meta['build'] = ['initiated' => $START_TS, 'duration' => $DURATION];
+              file_put_contents('$GITHUB_WORKSPACE/releases/nextcloud-${VERSION}.metadata',
+                json_encode(\$meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+            "
+            echo "Metadata file created"
+          else
+            echo "::warning::Could not generate metadata"
+          fi
+
+          rm -rf "$INSTALL_DIR"
 
       - name: Set permissions and create archives
         run: |
@@ -601,10 +646,14 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           VERSION="${{ inputs.version }}"
+          BRANCH="${{ needs.init.outputs.branch }}"
           FLAGS="${{ steps.flags.outputs.flags }}"
 
+          # Target the stable branch so the tag is created at the right commit
+          # (release script creates tags at the specific stable branch commit)
           gh release create "v${VERSION}" \
             --repo nextcloud-releases/server \
+            --target "$BRANCH" \
             --title "v${VERSION}" \
             --notes "" \
             $FLAGS \
@@ -615,10 +664,12 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           VERSION="${{ inputs.version }}"
+          BRANCH="${{ needs.init.outputs.branch }}"
           FLAGS="${{ steps.flags.outputs.flags }}"
 
           gh release create "v${VERSION}" \
             --repo nextcloud/server \
+            --target "$BRANCH" \
             --title "v${VERSION}" \
             --notes "https://github.com/nextcloud-releases/server/releases/tag/v${VERSION}" \
             $FLAGS
