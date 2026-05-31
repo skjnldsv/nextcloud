@@ -227,9 +227,7 @@ jobs:
             done < .nextcloudignore
           fi
 
-          # Remove dev file patterns (replicates getDataToBeRemovedFromAppFolders)
-          # Only includes patterns from the original list + format variants
-          # App-specific cleanup is handled by each app's .nextcloudignore
+          # Remove dev file patterns (based on getDataToBeRemovedFromAppFolders + improvements)
           DEV_PATTERNS=(
             .babelrc .babelrc.js .codecov.yml .devcontainer .drone.yml .editorconfig
             .eslintrc.cjs .eslintrc.js .eslintrc.json .eslintignore
@@ -237,19 +235,16 @@ jobs:
             .jshintrc .l10nignore .lgtm .nextcloudignore .npmignore .noopenapi
             .php_cs.dist .php-cs-fixer.dist.php .scrutinizer.yml .stylelintignore
             .stylelintrc.js .travis.yml .tx/
-            babel.config.js babel.config.cjs build-js/ build.xml
+            babel.config.js build-js/ build.xml
             check-handlebars-templates.sh codecov.yml compile-handlebars-templates.sh
             CONTRIBUTING.md
-            cypress.config.js cypress.config.ts cypress.config.mjs cypress.json cypress/
-            eslint.config.js eslint.config.mjs
+            cypress.config.js cypress.config.ts cypress.json cypress/
             issue_template.md jest-raw-loader.js jest.config.js jsconfig.json
-            krankerl.toml l10n/.gitkeep Makefile
-            postcss.config.js postcss.config.cjs psalm.xml
-            .prettierignore prettier.config.js prettier.config.cjs
+            krankerl.toml l10n/.gitkeep Makefile postcss.config.js psalm.xml
+            .prettierignore
             README.md rector.php renovate.json screenshots/ src/
             stylelint.config.js stylelint.config.cjs tests/ tsconfig.json
-            vite.config.js vite.config.ts vite.config.mjs
-            vitest.config.js vitest.config.ts
+            vite.config.js vite.config.ts vitest.config.js vitest.config.ts
             webpack.common.js webpack.config.js webpack.dev.js webpack.js webpack.prod.js
           )
 
@@ -261,7 +256,7 @@ jobs:
             fi
           done
 
-          # Catch-all: any *.config.{js,ts,mjs,cjs} is a dev config that shouldn't ship
+          # Catch-all: any *.config.{js,ts,mjs,cjs} is a dev/build config that shouldn't ship
           find . -maxdepth 1 \( -name "*.config.js" -o -name "*.config.ts" -o -name "*.config.mjs" -o -name "*.config.cjs" \) -delete 2>/dev/null || true
 
       - name: Remove .git and archive
@@ -749,10 +744,13 @@ jobs:
           # - Nextcloud Manual.pdf: part of docs generation
           # Known expected diffs:
           # - signature.json: depends on SIGN_PRIVATE_KEY secret
-          # - core/doc/: depends on DOCS_IMAGE
+          # - core/doc/: depends on docs generation
           # - Nextcloud Manual.pdf: part of docs
           # - .chunk.(mjs|css): hash-based filenames change with any code diff (branch drift)
-          KNOWN_PATTERN='(signature\.json|core/doc/|Nextcloud Manual\.pdf|\.chunk\.(mjs|css))'
+          # - *.config.(js|ts|mjs|cjs): dev configs now stripped (improvement over old releases)
+          # - .prettierignore: dev file now stripped
+          # - l10n/*.{js,json}: translation updates (branch drift)
+          KNOWN_PATTERN='(signature\.json|core/doc/|Nextcloud Manual\.pdf|\.chunk\.(mjs|css)|\.config\.(js|ts|mjs|cjs)$|\.prettierignore|/l10n/[^/]*\.(js|json)$)'
           UNEXPECTED_MISSING=$(grep -v -E "$KNOWN_PATTERN" /tmp/only-in-existing.txt | wc -l)
           UNEXPECTED_EXTRA=$(grep -v -E "$KNOWN_PATTERN" /tmp/only-in-new.txt | wc -l)
 
