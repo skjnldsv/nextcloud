@@ -550,33 +550,35 @@ jobs:
           echo "Generating migration metadata..."
           php "$INSTALL_DIR/nextcloud/occ" migrations:generate-metadata > /tmp/metadata-raw.json 2>/dev/null || true
 
-          if [ -s /tmp/metadata-raw.json ]; then
-            NOW_TS=$(date +%s)
-            DURATION=$((NOW_TS - START_TS))
-            mkdir -p "$GITHUB_WORKSPACE/releases"
-
-            export METADATA_FILE="/tmp/metadata-raw.json"
-            export OUTPUT_FILE="$GITHUB_WORKSPACE/releases/nextcloud-${VERSION}.metadata"
-            export BUILD_START="$START_TS"
-            export BUILD_DURATION="$DURATION"
-
-            php << 'EOPHP'
-            <?php
-            $raw = file_get_contents(getenv('METADATA_FILE'));
-            $meta = json_decode($raw, true) ?: [];
-            $meta['build'] = [
-                'initiated' => (int)getenv('BUILD_START'),
-                'duration' => (int)getenv('BUILD_DURATION'),
-            ];
-            file_put_contents(
-                getenv('OUTPUT_FILE'),
-                json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)
-            );
-            echo "Metadata file created\n";
-            EOPHP
-          else
+          if [ ! -s /tmp/metadata-raw.json ]; then
             echo "::warning::Could not generate metadata"
+            rm -rf "$INSTALL_DIR"
+            exit 0
           fi
+
+          NOW_TS=$(date +%s)
+          DURATION=$((NOW_TS - START_TS))
+          mkdir -p "$GITHUB_WORKSPACE/releases"
+
+          export METADATA_FILE="/tmp/metadata-raw.json"
+          export OUTPUT_FILE="$GITHUB_WORKSPACE/releases/nextcloud-${VERSION}.metadata"
+          export BUILD_START="$START_TS"
+          export BUILD_DURATION="$DURATION"
+
+          php << 'EOPHP'
+          <?php
+          $raw = file_get_contents(getenv('METADATA_FILE'));
+          $meta = json_decode($raw, true) ?: [];
+          $meta['build'] = [
+              'initiated' => (int)getenv('BUILD_START'),
+              'duration' => (int)getenv('BUILD_DURATION'),
+          ];
+          file_put_contents(
+              getenv('OUTPUT_FILE'),
+              json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)
+          );
+          echo "Metadata file created\n";
+          EOPHP
 
           rm -rf "$INSTALL_DIR" /tmp/metadata-raw.json
 
